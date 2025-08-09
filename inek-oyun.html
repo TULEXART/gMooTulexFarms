@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sınırsız 😊 İnek Oyunu — 10x10</title>
+  <style>
+    :root{--cell:48px}
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:18px;background:linear-gradient(180deg,#f6fffb,#e9f7ff);color:#0b3b2e}
+    h1{font-size:18px;margin-bottom:8px}
+    .wrap{display:flex;gap:18px}
+    .board{display:grid;grid-template-columns:repeat(10, var(--cell));grid-template-rows:repeat(10, var(--cell));gap:4px;background:#9be6c9;padding:8px;border-radius:10px;box-shadow:0 6px 20px rgba(11,59,46,0.12)}
+    .cell{width:var(--cell);height:var(--cell);display:flex;align-items:center;justify-content:center;font-size:22px;user-select:none;background:linear-gradient(180deg,#e6ffef,#d8fbe6);border-radius:6px}
+    .hud{min-width:240px}
+    .stat{background:#fff;padding:10px;border-radius:8px;box-shadow:0 6px 14px rgba(0,0,0,0.06);margin-bottom:10px}
+    .confetti{position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;overflow:hidden}
+    .confetti .piece{position:absolute;width:10px;height:14px;opacity:0;transform:translateY(-10px) rotate(0deg);animation:fall 1200ms linear forwards}
+    @keyframes fall{0%{opacity:1;transform:translateY(-10vh) rotate(0)}100%{opacity:1;transform:translateY(110vh) rotate(420deg)}}
+    .controls{margin-top:6px}
+    button{background:#0b6b4f;color:white;border:0;padding:8px 10px;border-radius:6px;cursor:pointer}
+    .small{font-size:13px;opacity:0.9}
+    /* cow sizes */
+    .cow{font-size:28px;transition:transform 180ms ease}
+    .hay{font-size:20px}
+  </style>
+</head>
+<body>
+  <h1>🧩 10×10 İnek Bahçesi — Ok tuşlarıyla kontrol et</h1>
+  <div style="display:flex;gap:12px;align-items:flex-start">
+    <div class="wrap">
+      <div class="board" id="board" aria-label="Oyun alanı"></div>
+    </div>
+    <div class="hud">
+      <div class="stat">
+        <div><strong>Kontrol edilen inek:</strong> <span id="playerId">1</span></div>
+        <div class="small">Toplanan saman: <strong id="hayCount">0</strong></div>
+        <div class="small">İnek büyüklüğü: <strong id="sizeDisplay">1.0×</strong></div>
+      </div>
+      <div class="stat small">
+        Kurallar:
+        <ul>
+          <li>Ok tuşlarıyla ana inek 🐄 hareket eder.</li>
+          <li>Haritada rastgele 🌾 (saman). Yediğinde inek biraz büyür.</li>
+          <li>Her 5 saman toplandığında konfeti ve yeni bir yavru (ekstra 🐄) doğar.</li>
+          <li>Saman yendiğinde yerine yenisi rastgele spawn olur.</li>
+        </ul>
+      </div>
+      <div class="stat">
+        <div style="display:flex;gap:6px;align-items:center">
+          <button id="resetBtn">Yeniden Başlat</button>
+          <button id="spawnHayBtn">1 Saman Ekle</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="confetti" id="confetti"></div>
+
+  <script>
+    // Oyun ayarları
+    const ROWS = 10, COLS = 10;
+    const INITIAL_HAY = 12;
+    const HAY_EMOJI = '🌾';
+    const COW_EMOJI = '🐄';
+
+    // Durum
+    const cells = []; // DOM hücreleri
+    const entities = {}; // id -> {type:'player'|'calf'|'hay', r,c, size, isPlayer}
+    let nextId = 1;
+    let playerEntityId = null;
+    let collectedHay = 0;
+
+    const board = document.getElementById('board');
+    const hayCountEl = document.getElementById('hayCount');
+    const sizeDisplay = document.getElementById('sizeDisplay');
+    const playerIdEl = document.getElementById('playerId');
+
+    // Hücreleri yarat
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const el = document.createElement('div');
+        el.className = 'cell';
+        el.dataset.r = r; el.dataset.c = c;
+        board.appendChild(el);
+        cells.push(el);
+      }
+    }
+
+    function idx(r,c){ return r*COLS + c }
+    function emptyCells(){
+      const empties = [];
+      for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+        const found = Object.values(entities).some(e => e.r===r && e.c===c && e.type!=='hay');
+        // hay can share with cow? No. Ensure empty for placing animals. For hay placement we allow empty only (no animal)
+        if(!found && !Object.values(entities).some(e=>e.r===r && e.c===c && e.type==='hay')){
+          empties.push({r,c});
+        }
+      }
+      return empties;
+    }
+
+    function randomEmpty(){
+      const em = emptyCells();
+      if(em.length===0) return null;
+      return em[Math.floor(Math.random()*em.length)];
+    }
+
+    function placeEntity(type, r, c, opts={}){
+      const id = nextId++;
+      entities[id] = {id, type, r, c, size: (opts.size||1), isPlayer: !!opts.isPlayer};
+      if(type === 'player' || type==='calf') entities[id].size = opts.size||1;
+      renderCell(r,c);
+      return id;
+    }
+
+    function render(){
+      // clear all
+      cells.forEach(cell => cell.textContent='');
+      // draw hays first
+      for(const id in entities){
+        const e = entities[id];
+        const el = cells[idx(e.r,e.c)];
+        if(e.type==='hay'){
+          el.textContent = HAY_EMOJI;
+          el.classList.add('hay');
+        }
+      }
+      // draw animals (so they appear on top)
+      for(const id in entities){
+        const e = entities[id];
+        if(e.type==='player' || e.type==='calf'){
+          const el = cells[idx(e.r,e.c)];
+          const span = document.createElement('span');
+          span.textContent = COW_EMOJI;
+          span.className = 'cow';
+          span.style.transform = `scale(${e.size})`;
+          // title
+          span.title = (e.isPlayer? 'Senin inek' : 'Yavru');
+          el.appendChild(span);
+        }
+      }
+      // update HUD
+      hayCountEl.textContent = collectedHay;
+      const player = entities[playerEntityId];
+      sizeDisplay.textContent = player ? player.size.toFixed(2) + '×' : '—';
+      playerIdEl.textContent = playerEntityId || '-';
+    }
+
+    function renderCell(r,c){
+      cells[idx(r,c)].textContent='';
+      // draw hay if exists at this pos
+      for(const id in entities){
+        const e=entities[id];
+        if(e.r===r && e.c===c){
+          if(e.type==='hay'){
+            cells[idx(r,c)].textContent = HAY_EMOJI;
+            cells[idx(r,c)].classList.add('hay');
+          }
+        }
+      }
+      // then animals
+      for(const id in entities){
+        const e=entities[id];
+        if((e.type==='player' || e.type==='calf') && e.r===r && e.c===c){
+          const span = document.createElement('span');
+          span.textContent = COW_EMOJI;
+          span.className = 'cow';
+          span.style.transform = `scale(${e.size})`;
+          cells[idx(r,c)].appendChild(span);
+        }
+      }
+    }
+
+    function spawnInitial(){
+      // clear
+      for(const k in entities) delete entities[k]; nextId=1; collectedHay=0; playerEntityId=null;
+      // place player in center-ish
+      const pr = Math.floor(ROWS/2), pc = Math.floor(COLS/2);
+      playerEntityId = placeEntity('player', pr, pc, {isPlayer:true, size:1});
+      // place some calves none at start; place initial hay
+      for(let i=0;i<INITIAL_HAY;i++) spawnHay();
+      render();
+    }
+
+    function spawnHay(){
+      // find any cell not occupied by hay (but can be occupied by animals?) We'll put hay only on empty (no animal)
+      const empties = [];
+      for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+        const animalHere = Object.values(entities).some(e=> (e.type==='player' || e.type==='calf') && e.r===r && e.c===c);
+        const hayHere = Object.values(entities).some(e=> e.type==='hay' && e.r===r && e.c===c);
+        if(!animalHere && !hayHere) empties.push({r,c});
+      }
+      if(empties.length===0) return null;
+      const choice = empties[Math.floor(Math.random()*empties.length)];
+      const id = placeEntity('hay', choice.r, choice.c);
+      return id;
+    }
+
+    // hareket
+    function moveEntity(id, dr, dc){
+      const e = entities[id];
+      if(!e) return;
+      const nr = Math.min(ROWS-1, Math.max(0, e.r+dr));
+      const nc = Math.min(COLS-1, Math.max(0, e.c+dc));
+      // if another animal occupies target, don't move
+      const occupied = Object.values(entities).some(en => (en.type==='player' || en.type==='calf') && en.id!==e.id && en.r===nr && en.c===nc);
+      if(occupied) return;
+      e.r = nr; e.c = nc;
+      // if player and hay at this cell -> eat
+      if(e.type==='player'){
+        const hayId = Object.values(entities).find(k=> k.type==='hay' && k.r===nr && k.c===nc);
+        if(hayId){
+          // remove hay
+          const hid = hayId.id;
+          delete entities[hid];
+          collectedHay++;
+          // grow a bit
+          e.size = Math.min(2.2, e.size + 0.08);
+          // spawn a new hay somewhere
+          spawnHay();
+          // every 5 hay -> confetti + spawn calf
+          if(collectedHay % 5 === 0){
+            doConfetti();
+            spawnCalf();
+          }
+        }
+      }
+      render();
+    }
+
+    // rastgele hareket eden yavrular
+    const calfIntervals = {};
+    function spawnCalf(){
+      // find empty for calf
+      const em = emptyCells();
+      if(em.length===0) return null;
+      const pos = em[Math.floor(Math.random()*em.length)];
+      const id = placeEntity('calf', pos.r, pos.c, {size:0.8});
+      // calf hareketi
+      calfIntervals[id] = setInterval(()=>{
+        if(!entities[id]){ clearInterval(calfIntervals[id]); return; }
+        const dirs = [[1,0],[-1,0],[0,1],[0,-1],[0,0]];
+        const d = dirs[Math.floor(Math.random()*dirs.length)];
+        const nr = Math.min(ROWS-1, Math.max(0, entities[id].r + d[0]));
+        const nc = Math.min(COLS-1, Math.max(0, entities[id].c + d[1]));
+        // don't step onto hay (calf can, but let's avoid)
+        const hasAnimal = Object.values(entities).some(en => (en.type==='player' || en.type==='calf') && en.id!==id && en.r===nr && en.c===nc);
+        if(!hasAnimal) { entities[id].r = nr; entities[id].c = nc; }
+        render();
+      }, 700 + Math.random()*800);
+      render();
+    }
+
+    // confetti
+    function doConfetti(){
+      const container = document.getElementById('confetti');
+      for(let i=0;i<40;i++){
+        const p = document.createElement('div');
+        p.className='piece';
+        p.style.left = (Math.random()*100)+'%';
+        p.style.background = ['#ff4d6d','#ffd166','#6ee7b7','#7cc0ff','#c77dff'][Math.floor(Math.random()*5)];
+        p.style.width = (6+Math.random()*12)+'px';
+        p.style.height = (8+Math.random()*12)+'px';
+        p.style.top = (-10 - Math.random()*10)+'vh';
+        p.style.animationDuration = (900 + Math.random()*700)+'ms';
+        container.appendChild(p);
+        setTimeout(()=>{ p.remove(); }, 1800);
+      }
+    }
+
+    // klavye
+    window.addEventListener('keydown', (ev)=>{
+      const key = ev.key;
+      if(!playerEntityId) return;
+      if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key)) ev.preventDefault();
+      if(key==='ArrowUp') moveEntity(playerEntityId, -1, 0);
+      if(key==='ArrowDown') moveEntity(playerEntityId, 1, 0);
+      if(key==='ArrowLeft') moveEntity(playerEntityId, 0, -1);
+      if(key==='ArrowRight') moveEntity(playerEntityId, 0, 1);
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', ()=>{ spawnInitial(); });
+    document.getElementById('spawnHayBtn').addEventListener('click', ()=>{ spawnHay(); render(); });
+
+    // Başlat
+    spawnInitial();
+
+    // başlangıçta birkaç yavru isterseniz ekleyebilirsiniz (opsiyonel)
+  </script>
+</body>
+</html>
